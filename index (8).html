@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>江戸川ランニングマップ（試作）</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --ink: #1b2a3a;
+    --muted: #5d6b7a;
+    --line: #d9e2ea;
+    --bg: #f5f8fb;
+    --accent: #1f6fb2;
+    --river: #6aa9d8;
+    --run: #e10600;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    display: flex;
+    height: 100vh;
+    height: 100dvh;
+  }
+  #panel {
+    width: 350px;
+    flex: none;
+    overflow-y: auto;
+    padding: 16px 18px 20px;
+    background: #fff;
+    border-right: 1px solid var(--line);
+  }
+  #map { flex: 1 1 auto; min-width: 0; min-height: 0; background: #eef2f5; }
+  h1 { font-size: 18px; margin: 0 0 2px; letter-spacing: .02em; }
+  .sub { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 12px; margin-bottom: 12px; }
+  .card h2 { font-size: 12px; margin: 0 0 8px; color: var(--muted); font-weight: 600; letter-spacing: .04em; }
+  #status { font-size: 13px; line-height: 1.5; }
+  #status.ok { color: #1d7a46; }
+  #status.err { color: #b3261e; }
+  #status { white-space: pre-wrap; word-break: break-all; }
+  #help { display: none; font-size: 12px; line-height: 1.6; margin-top: 8px; padding: 8px 10px; background: #fff7e6; border: 1px solid #f3d9a4; border-radius: 8px; }
+  #help ol { margin: 4px 0 0 18px; padding: 0; }
+  button, .btn {
+    font: inherit; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--accent); color: var(--accent); background: #fff;
+    border-radius: 8px; padding: 7px 12px;
+  }
+  button:hover, .btn:hover { background: #eef5fb; }
+  button.primary, .btn.primary { background: var(--accent); color: #fff; }
+  button.primary:hover, .btn.primary:hover { background: #185a92; }
+  button.quiet { border-color: var(--line); color: var(--muted); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .big { font-size: 44px; font-weight: 700; line-height: 1.1; color: var(--run); }
+  .big .unit { font-size: 22px; margin-left: 2px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: flex-end; }
+  .stat .lab { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .big small { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .bar { height: 12px; background: #e8eef3; border-radius: 6px; overflow: hidden; margin: 8px 0 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--run); transition: width .3s; }
+  .muted { color: var(--muted); font-size: 12px; }
+  input[type=range] { width: 100%; }
+  ul#tracks { list-style: none; margin: 8px 0 0; padding: 0; }
+  ul#tracks li { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 0; border-top: 1px solid var(--line); }
+  ul#tracks li span.name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ul#tracks li button { padding: 1px 8px; font-size: 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; margin-top: 6px; }
+  .legend i { display: inline-block; width: 22px; height: 5px; border-radius: 3px; vertical-align: middle; margin-right: 5px; }
+  label.check { font-size: 13px; display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .foot { font-size: 11px; color: var(--muted); line-height: 1.6; }
+  input[type=file] { display: none; }
+  @media (max-width: 720px) {
+    body { flex-direction: column-reverse; }
+    #panel { width: auto; max-height: 46vh; border-right: 0; border-top: 1px solid var(--line); }
+    #map { flex: 1 1 auto; }
+  }
+</style>
+</head>
+<body>
+<aside id="panel">
+  <h1>江戸川ランニングマップ</h1>
+  <p class="sub">GPXを読み込むと、走った区間の川が色づきます（試作版）</p>
+
+  <div class="card">
+    <h2>河川データ</h2>
+    <div id="status">読み込み中…</div>
+    <div id="help">
+      <b>うまくいかないときは</b>
+      <ol>
+        <li>Claudeの画面内プレビューではなく、ダウンロードしたファイルをChromeなどのブラウザで直接開いているか確認してください（プレビュー内では外部との通信が制限されます）。</li>
+        <li>それでも取得できない場合は、<a id="manualLink" href="#" target="_blank" rel="noopener">こちらを開いて</a>表示されたデータを保存（Windowsは Ctrl+S、Macは ⌘S）し、下の「河川ファイルを読み込む」で、その保存したファイルを指定してください。</li>
+      </ol>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnReload" class="quiet">再取得</button>
+      <label class="btn quiet" for="fileRiver">河川ファイルを読み込む</label>
+      <input id="fileRiver" type="file">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>走ったログ（GPX）</h2>
+    <div class="row">
+      <label class="btn primary" for="fileGpx">GPXを選ぶ</label>
+      <input id="fileGpx" type="file" accept=".gpx,application/gpx+xml,text/xml" multiple>
+      <button id="btnFit" class="quiet">川全体を表示</button>
+    </div>
+    <div class="muted" style="margin-top:6px">地図の上にドラッグ＆ドロップもできます。複数のファイルを読み込むと、走った区間が合算されます。</div>
+    <ul id="tracks"></ul>
+    <label class="check"><input id="chkTrack" type="checkbox" checked> 走行軌跡の線を表示</label>
+  </div>
+
+  <div class="card">
+    <h2>走破状況</h2>
+    <div class="stats">
+      <div class="stat"><div class="big"><span id="pct">0.0</span><span class="unit">%</span></div><div class="lab">走破率</div></div>
+      <div class="stat"><div class="big"><span id="doneKm">0.0</span><span class="unit">km</span></div><div class="lab">走行距離</div></div>
+    </div>
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="muted">川の総延長 <span id="totalKm">–</span> km</div>
+    <div class="legend">
+      <span><i style="background:var(--river)"></i>未走破</span>
+      <span><i style="background:var(--run)"></i>走った区間</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>「川沿い」の判定距離</h2>
+    <input id="thr" type="range" min="10" max="500" step="10" value="200">
+    <div class="muted">川から <b id="thrVal">200</b> m 以内を走った区間を走破とみなします。河川敷が広く色がつかない場所は大きめに調整してください。ただし大きくしすぎると、川の近くの別の道を走った分も含まれます。</div>
+  </div>
+
+  <div class="foot">
+    GPXはこのブラウザの中だけで処理され、外部には送信されません。<br>
+    地図: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>（淡色地図）<br>
+    河川データ: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL)
+  </div>
+</aside>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// ==CORE START==
+// 地理計算（DOM非依存）。東京近郊(北緯35.65度付近)で十分な精度の平面近似を使う。
+const LAT0 = 35.65, LON0 = 139.5;
+const M_LAT = 111132;
+const M_LON = 111320 * Math.cos(LAT0 * Math.PI / 180);
+function proj(lat, lon) { return [(lon - LON0) * M_LON, (lat - LAT0) * M_LAT]; }
+function unproj(x, y) { return [y / M_LAT + LAT0, x / M_LON + LON0]; }
+function dist(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
+
+// GPX(trkpt / rtept)から [[lat,lon],...] のセグメント配列を取り出す
+function parseGpx(text) {
+  const parts = String(text).split(/<(?:trkseg|rte)\b/i);
+  const segs = [];
+  const ptRe = /<(?:trkpt|rtept)\b([^>]*)>/gi;
+  for (const part of parts) {
+    const seg = [];
+    let m;
+    ptRe.lastIndex = 0;
+    while ((m = ptRe.exec(part)) !== null) {
+      const la = /\blat\s*=\s*["']\s*(-?[\d.]+)/i.exec(m[1]);
+      const lo = /\blon\s*=\s*["']\s*(-?[\d.]+)/i.exec(m[1]);
+      if (!la || !lo) continue;
+      const lat = parseFloat(la[1]), lon = parseFloat(lo[1]);
+      if (isFinite(lat) && isFinite(lon)) seg.push([lat, lon]);
+    }
+    if (seg.length) segs.push(seg);
+  }
+  return segs;
+}
+
+function trackLength(segs) {
+  let s = 0;
+  for (const seg of segs) {
+    let prev = null;
+    for (const [la, lo] of seg) {
+      const p = proj(la, lo);
+      if (prev) s += dist(prev, p);
+      prev = p;
+    }
+  }
+  return s;
+}
+
+// 軌跡を step(m) 間隔に補間した平面座標の点列にする。maxGap(m)を超える飛びは補間しない。
+function densify(segs, step = 10, maxGap = 200) {
+  const out = [];
+  for (const seg of segs) {
+    let prev = null;
+    for (const [la, lo] of seg) {
+      const p = proj(la, lo);
+      if (prev) {
+        const d = dist(prev, p);
+        if (d > step && d <= maxGap) {
+          const n = Math.ceil(d / step);
+          for (let k = 1; k < n; k++) {
+            const t = k / n;
+            out.push([prev[0] + (p[0] - prev[0]) * t, prev[1] + (p[1] - prev[1]) * t]);
+          }
+        }
+      }
+      out.push(p);
+      prev = p;
+    }
+  }
+  return out;
+}
+
+function polyLen(P) { let s = 0; for (let i = 1; i < P.length; i++) s += dist(P[i - 1], P[i]); return s; }
+function midPoint(P, len) {
+  const half = len / 2;
+  let acc = 0;
+  for (let i = 1; i < P.length; i++) {
+    const d = dist(P[i - 1], P[i]);
+    if (d > 0 && acc + d >= half) {
+      const t = (half - acc) / d;
+      return [P[i - 1][0] + (P[i][0] - P[i - 1][0]) * t, P[i - 1][1] + (P[i][1] - P[i - 1][1]) * t];
+    }
+    acc += d;
+  }
+  return P[P.length - 1];
+}
+function makeChunk(P) {
+  const len = polyLen(P);
+  return { P, len, mid: midPoint(P, len), ll: P.map(p => unproj(p[0], p[1])) };
+}
+
+// 河川(線のリスト)を chunkLen(m) ごとの区間に分割する。端の短い余りは直前の区間に合体。
+function chunkRiver(ways, chunkLen = 50, minTail = 10) {
+  const chunks = [];
+  for (const way of ways) {
+    if (!way || way.length < 2) continue;
+    const P = way.map(([la, lo]) => proj(la, lo));
+    const first = chunks.length;
+    let cur = [P[0]], curLen = 0;
+    for (let i = 1; i < P.length; i++) {
+      const a = P[i - 1], b = P[i];
+      const segLen = dist(a, b);
+      if (segLen <= 0) continue;
+      let pos = 0;
+      while (curLen + (segLen - pos) >= chunkLen) {
+        pos += chunkLen - curLen;
+        const t = pos / segLen;
+        const pt = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        cur.push(pt);
+        chunks.push(makeChunk(cur));
+        cur = [pt];
+        curLen = 0;
+      }
+      if (segLen - pos > 1e-9) {
+        curLen += segLen - pos;
+        cur.push(b);
+      }
+    }
+    if (curLen > 1e-9 && cur.length >= 2) {
+      if (curLen < minTail && chunks.length > first) {
+        const prev = chunks[chunks.length - 1];
+        chunks[chunks.length - 1] = makeChunk(prev.P.concat(cur.slice(1)));
+      } else {
+        chunks.push(makeChunk(cur));
+      }
+    }
+  }
+  return chunks;
+}
+
+function buildGrid(points, cell) {
+  const g = new Map();
+  for (const p of points) {
+    const k = Math.floor(p[0] / cell) + ',' + Math.floor(p[1] / cell);
+    let a = g.get(k);
+    if (!a) { a = []; g.set(k, a); }
+    a.push(p);
+  }
+  return g;
+}
+function nearAny(grid, cell, x, y, r) {
+  const ix = Math.floor(x / cell), iy = Math.floor(y / cell), r2 = r * r;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const a = grid.get((ix + dx) + ',' + (iy + dy));
+      if (!a) continue;
+      for (const p of a) {
+        const ex = p[0] - x, ey = p[1] - y;
+        if (ex * ex + ey * ey <= r2) return true;
+      }
+    }
+  }
+  return false;
+}
+// 各区間の中点が、軌跡の threshold(m) 以内にあれば 1、なければ 0
+function coverage(chunks, trackPts, threshold) {
+  const grid = buildGrid(trackPts, threshold);
+  const flags = new Uint8Array(chunks.length);
+  for (let i = 0; i < chunks.length; i++) {
+    const m = chunks[i].mid;
+    flags[i] = nearAny(grid, threshold, m[0], m[1], threshold) ? 1 : 0;
+  }
+  return flags;
+}
+
+// Overpass APIのJSON（out geom）から河川の線を取り出す
+function parseOverpass(json) {
+  const ways = [];
+  for (const el of (json && json.elements) || []) {
+    if (el.type === 'way' && Array.isArray(el.geometry)) {
+      const w = el.geometry.filter(g => g && isFinite(g.lat) && isFinite(g.lon)).map(g => [g.lat, g.lon]);
+      if (w.length >= 2) ways.push(w);
+    }
+  }
+  return ways;
+}
+// GeoJSON（LineString / MultiLineString）から河川の線を取り出す
+function parseGeoJSON(obj) {
+  const ways = [];
+  const addLine = c => { const w = c.map(p => [p[1], p[0]]); if (w.length >= 2) ways.push(w); };
+  const visit = g => {
+    if (!g) return;
+    switch (g.type) {
+      case 'FeatureCollection': (g.features || []).forEach(visit); break;
+      case 'Feature': visit(g.geometry); break;
+      case 'GeometryCollection': (g.geometries || []).forEach(visit); break;
+      case 'LineString': addLine(g.coordinates); break;
+      case 'MultiLineString': g.coordinates.forEach(addLine); break;
+    }
+  };
+  visit(obj);
+  return ways;
+}
+// ==CORE END==
+</script>
+
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const km = m => (m / 1000).toFixed(1);
+
+  // ---- 地図 ----
+  const map = L.map('map', { preferCanvas: true }).setView([35.75, 139.87], 11);
+  L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>'
+  }).addTo(map);
+  const canvas = L.canvas({ padding: 0.5 });
+  const base = { renderer: canvas, interactive: false, lineCap: 'round', lineJoin: 'round' };
+  const riverLayer = L.polyline([], Object.assign({ color: '#6aa9d8', weight: 3, opacity: 0.6 }, base)).addTo(map);
+  const runLayer = L.polyline([], Object.assign({ color: '#e10600', weight: 5, opacity: 0.95 }, base)).addTo(map);
+  const trackLayer = L.layerGroup().addTo(map);
+
+  // ---- 状態 ----
+  let chunks = [];
+  let tracks = [];   // { name, segs, dense, len }
+  let threshold = 200;
+
+  function setStatus(text, cls) {
+    const el = $('status');
+    el.textContent = text;
+    el.className = cls || '';
+    $('help').style.display = cls === 'err' ? 'block' : 'none';
+  }
+
+  // ---- 走破計算と描画 ----
+  function recompute() {
+    const counts = new Uint16Array(chunks.length);
+    for (const t of tracks) {
+      const f = coverage(chunks, t.dense, threshold);
+      for (let i = 0; i < f.length; i++) counts[i] += f[i];
+    }
+    const g = [];
+    let total = 0, done = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const c = chunks[i];
+      total += c.len;
+      if (counts[i] > 0) {
+        done += c.len;
+        g.push(c.ll);
+      }
+    }
+    runLayer.setLatLngs(g);
+    $('doneKm').textContent = km(done);
+    $('totalKm').textContent = chunks.length ? km(total) : '–';
+    const pct = total > 0 ? (done / total) * 100 : 0;
+    $('pct').textContent = pct.toFixed(1);
+    $('barFill').style.width = Math.min(100, pct) + '%';
+  }
+
+  function drawTracks() {
+    trackLayer.clearLayers();
+    if (!$('chkTrack').checked) return;
+    for (const t of tracks) {
+      for (const seg of t.segs) {
+        L.polyline(seg, { renderer: canvas, interactive: false, color: '#26323f', weight: 1.5, opacity: 0.55 }).addTo(trackLayer);
+      }
+    }
+  }
+
+  function renderTrackList() {
+    const ul = $('tracks');
+    ul.textContent = '';
+    tracks.forEach((t, i) => {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = t.name;
+      name.title = t.name;
+      const len = document.createElement('span');
+      len.className = 'muted';
+      len.textContent = km(t.len) + ' km';
+      const del = document.createElement('button');
+      del.className = 'quiet';
+      del.textContent = '×';
+      del.title = 'このGPXを外す';
+      del.addEventListener('click', () => {
+        tracks.splice(i, 1);
+        renderTrackList(); drawTracks(); recompute();
+      });
+      li.append(name, len, del);
+      ul.append(li);
+    });
+  }
+
+  function fitAll() {
+    const b = L.latLngBounds([]);
+    if (chunks.length) b.extend(riverLayer.getBounds());
+    if (b.isValid()) map.fitBounds(b, { padding: [20, 20] });
+  }
+
+  // ---- 河川データ ----
+  const CACHE_KEY = 'edo_river_osm_v1';
+  const CACHE_DAYS = 30;
+  const ENDPOINTS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+  ];
+  // 東京都・千葉県の境を流れる江戸川（関宿〜河口付近）を含む範囲
+  const QUERY = '[out:json][timeout:40];way["waterway"="river"]["name"="江戸川"](35.60,139.68,36.08,139.95);out geom;';
+  $('manualLink').href = ENDPOINTS[0] + '?data=' + encodeURIComponent(QUERY);
+
+  function setWays(ways, source) {
+    chunks = chunkRiver(ways, 50);
+    riverLayer.setLatLngs(chunks.map(c => c.ll));
+    recompute();
+    const total = chunks.reduce((s, c) => s + c.len, 0);
+    setStatus('江戸川 ' + chunks.length + '区間（総延長 ' + km(total) + ' km）／' + source, 'ok');
+  }
+
+  function readCache() {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (!raw) return null;
+      const c = JSON.parse(raw);
+      if (!c || !Array.isArray(c.ways) || Date.now() - c.t > CACHE_DAYS * 86400000) return null;
+      return c;
+    } catch (e) { return null; }
+  }
+  function writeCache(ways) {
+    try {
+      const rounded = ways.map(w => w.map(p => [+p[0].toFixed(5), +p[1].toFixed(5)]));
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), ways: rounded }));
+    } catch (e) { /* 容量超過などは無視 */ }
+  }
+
+  async function fetchOverpass() {
+    const errors = [];
+    for (const url of ENDPOINTS) {
+      const host = new URL(url).hostname;
+      setStatus('江戸川のデータを取得しています…（' + host + '）\n初回は数十秒かかることがあります。');
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 50000);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(QUERY),
+          signal: ctl.signal
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const ways = parseOverpass(await res.json());
+        if (!ways.length) throw new Error('江戸川のデータが見つかりませんでした');
+        return ways;
+      } catch (e) {
+        errors.push('・' + host + ' → ' + (e && e.name === 'AbortError' ? '時間切れ' : ((e && e.message) || String(e))));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw new Error(errors.join('\n'));
+  }
+
+  async function loadRiver(force) {
+    if (!force) {
+      const c = readCache();
+      if (c) { setWays(c.ways, 'OpenStreetMap（保存済み）'); fitAll(); return; }
+    }
+    try {
+      const ways = await fetchOverpass();
+      writeCache(ways);
+      setWays(ways, 'OpenStreetMap');
+      fitAll();
+    } catch (e) {
+      setStatus('河川データを取得できませんでした。\n' + (e && e.message ? e.message : e), 'err');
+    }
+  }
+
+  // ---- GPX ----
+  async function addGpxFiles(files) {
+    let added = 0, failed = [];
+    for (const f of files) {
+      try {
+        const segs = parseGpx(await f.text());
+        const pts = segs.reduce((s, x) => s + x.length, 0);
+        if (pts < 2) { failed.push(f.name); continue; }
+        tracks.push({ name: f.name, segs, dense: densify(segs, 10, 200), len: trackLength(segs) });
+        added++;
+      } catch (e) { failed.push(f.name); }
+    }
+    renderTrackList(); drawTracks(); recompute();
+    if (added) {
+      const b = L.latLngBounds([]);
+      tracks.forEach(t => t.segs.forEach(s => s.forEach(p => b.extend(p))));
+      if (b.isValid()) map.fitBounds(b, { padding: [30, 30] });
+    }
+    if (failed.length) alert('位置情報を読み取れなかったファイル:\n' + failed.join('\n'));
+  }
+
+  // ---- イベント ----
+  $('fileGpx').addEventListener('change', e => { addGpxFiles(Array.from(e.target.files)); e.target.value = ''; });
+  $('fileRiver').addEventListener('change', async e => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const obj = JSON.parse(await f.text());
+      const ways = obj && obj.elements ? parseOverpass(obj) : parseGeoJSON(obj);
+      if (!ways.length) throw new Error('線のデータがありません');
+      setWays(ways, 'ファイル「' + f.name + '」');
+      fitAll();
+    } catch (err) {
+      setStatus('河川ファイルを読み込めませんでした（' + err.message + '）', 'err');
+    }
+  });
+  $('btnReload').addEventListener('click', () => loadRiver(true));
+  $('btnFit').addEventListener('click', fitAll);
+  $('chkTrack').addEventListener('change', drawTracks);
+  $('thr').addEventListener('input', e => {
+    threshold = parseInt(e.target.value, 10);
+    $('thrVal').textContent = threshold;
+    recompute();
+  });
+  const mapEl = $('map');
+  mapEl.addEventListener('dragover', e => e.preventDefault());
+  mapEl.addEventListener('drop', e => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files).filter(f => /\.gpx$/i.test(f.name));
+    if (files.length) addGpxFiles(files);
+  });
+
+  loadRiver(false);
+})();
+</script>
+</body>
+</html>
